@@ -19,12 +19,15 @@ echo "Node: $(hostname)"
 date
 echo "============================="
 
+# Silence albumentations update check warning (optional)
+export NO_ALBUMENTATIONS_UPDATE=1
+
 # ---- (OPTIONAL) Activate conda env ----
-# If you already have torch working in your current env, keep using it.
-# If you want to use conda, uncomment and set your env name.
+# If you already have torch + rfdetr installed in the env SLURM uses, you can leave this commented.
+# Otherwise, uncomment and set your env name.
 #
 # source /opt/anaconda3/2023.07-2/etc/profile.d/conda.sh
-# /opt/anaconda3/2023.07-2/condabin/conda activate rfdetr
+# /opt/anaconda3/2023.07-2/condabin/conda activate test   # <-- change env name if needed
 
 echo "Python: $(which python)"
 python -c "import torch; print('torch', torch.__version__); print('CUDA?', torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no gpu')"
@@ -46,13 +49,32 @@ echo "Copying dataset to:   $DATA_DST"
 
 mkdir -p "$JOB_SCRATCH"
 
-# Faster + safer than cp for large dirs (keeps permissions, shows progress-ish)
+# rsync is safer/faster for big datasets than cp -r
 rsync -a --info=progress2 "$DATA_SRC"/ "$DATA_DST"/
 
 export DATASET_DIR="$DATA_DST"
 
-echo "Dataset staged. Listing top-level:"
-ls -la "$DATASET_DIR" | head -n 50
+echo "Dataset staged. Top-level:"
+ls -la "$DATASET_DIR" | head -n 80
+
+# ---- DDP env vars for single-GPU (fixes MASTER_ADDR error) ----
+export MASTER_ADDR=127.0.0.1
+export MASTER_PORT=$((10000 + RANDOM % 50000))
+export WORLD_SIZE=1
+export RANK=0
+export LOCAL_RANK=0
+
+# ---- NCCL safety (prevents some HPC hangs) ----
+export NCCL_DEBUG=warn
+export NCCL_IB_DISABLE=1
+export NCCL_P2P_DISABLE=1
+
+echo "DDP env:"
+echo "MASTER_ADDR=$MASTER_ADDR"
+echo "MASTER_PORT=$MASTER_PORT"
+echo "WORLD_SIZE=$WORLD_SIZE"
+echo "RANK=$RANK"
+echo "LOCAL_RANK=$LOCAL_RANK"
 
 # ---- TRAIN ----
 # Assumes train_rfdetr.py is in the directory you submit from
@@ -76,7 +98,7 @@ mkdir -p "$OUT_DST"
 if [ -d "$OUT_SRC" ]; then
   rsync -a --info=progress2 "$OUT_SRC"/ "$OUT_DST"/
 else
-  echo "WARNING: $OUT_SRC not found. Check training script export path."
+  echo "WARNING: $OUT_SRC not found. Check model.export() path in train_rfdetr.py"
 fi
 
 # ---- CLEANUP ----
